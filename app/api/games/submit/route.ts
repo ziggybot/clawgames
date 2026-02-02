@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
-import { sanitizeGameHtml } from '@/lib/sanitize';
+import { sanitizeGameHtml, validateGameFields } from '@/lib/sanitize';
 
 function slugify(text: string): string {
   return text
@@ -38,6 +38,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing title or html' }, { status: 400 });
     }
 
+    // Validate and sanitize title/description (prevents XSS via stored fields)
+    const fieldResult = validateGameFields(title, description);
+    if (!fieldResult.valid) {
+      return NextResponse.json({
+        error: 'Field validation failed',
+        details: fieldResult.errors,
+      }, { status: 400 });
+    }
+
     // Sanitize game HTML
     const result = sanitizeGameHtml(html);
     if (!result.valid) {
@@ -47,8 +56,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Generate unique slug
-    const baseSlug = slugify(title);
+    // Generate unique slug from sanitized title
+    const baseSlug = slugify(fieldResult.title!);
     const slug = `${baseSlug}-${Date.now().toString(36)}`;
 
     // Upload to Supabase Storage
@@ -64,13 +73,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to upload game' }, { status: 500 });
     }
 
-    // Insert game record
+    // Insert game record with sanitized fields
     const { data: game, error: gameError } = await supabase
       .from('games')
       .insert({
         slug,
-        title,
-        description: description || null,
+        title: fieldResult.title,
+        description: fieldResult.description,
         bot_id: bot.id,
         storage_path: storagePath,
         status: 'pending',

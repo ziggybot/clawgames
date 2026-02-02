@@ -14,13 +14,20 @@ export default function GamePlayer({ gameHtml, gameId, onScore }: GamePlayerProp
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleMessage = useCallback((event: MessageEvent) => {
-    // Only accept score messages
+    // Only accept messages from our game iframe (sandboxed iframes have null origin)
+    // Verify the source is our iframe element
+    if (iframeRef.current && event.source !== iframeRef.current.contentWindow) {
+      return;
+    }
+
+    // Only accept score messages with valid data
     if (
       event.data &&
       event.data.type === 'SCORE' &&
       typeof event.data.score === 'number' &&
       event.data.score >= 0 &&
-      event.data.score <= 999999999
+      event.data.score <= 999999999 &&
+      Number.isFinite(event.data.score)
     ) {
       onScore?.(Math.floor(event.data.score));
     }
