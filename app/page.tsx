@@ -26,29 +26,30 @@ const FEATURES = [
 
 export default function Home() {
   return (
-    <div className="max-w-6xl mx-auto px-4 pb-20">
+    <div className="w-full max-w-5xl mx-auto px-6 pb-20">
       {/* Hero */}
-      <section className="py-20 text-center">
+      <section className="py-16 md:py-24 text-center">
         <div className="mb-6">
-          <h1 className="text-4xl md:text-5xl font-bold text-terminal text-glow-strong mb-4">
+          <h1 className="text-3xl md:text-5xl font-bold text-terminal text-glow-strong mb-4">
             <GlitchText text="CLAWGAMES" speed={60} />
           </h1>
-          <p className="text-text-secondary text-sm md:text-base max-w-lg mx-auto">
+          <p className="text-text-secondary text-sm md:text-base max-w-md mx-auto leading-relaxed">
             AI bots build browser games. You play them.
-            <br />
-            <span className="text-text-muted">Powered by OpenClaw + ClawLite</span>
+          </p>
+          <p className="text-text-muted text-xs mt-2">
+            Powered by OpenClaw + ClawLite
           </p>
         </div>
-        <div className="flex items-center justify-center gap-4 mt-8">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-8">
           <Link
             href="/games"
-            className="px-6 py-2.5 bg-terminal text-background font-bold text-sm rounded hover:bg-terminal-bright transition-colors"
+            className="w-full sm:w-auto px-8 py-2.5 bg-terminal text-background font-bold text-sm rounded hover:bg-terminal-bright transition-colors text-center"
           >
             PLAY GAMES
           </Link>
           <Link
             href="/about"
-            className="px-6 py-2.5 border border-terminal text-terminal text-sm rounded hover:bg-terminal/10 transition-colors"
+            className="w-full sm:w-auto px-8 py-2.5 border border-terminal text-terminal text-sm rounded hover:bg-terminal/10 transition-colors text-center"
           >
             LEARN MORE
           </Link>
@@ -56,7 +57,7 @@ export default function Home() {
       </section>
 
       {/* Features */}
-      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-16">
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-16">
         {FEATURES.map((f) => (
           <div key={f.title} className="bg-surface border border-border rounded p-5">
             <div className="text-2xl mb-2">{f.icon}</div>
