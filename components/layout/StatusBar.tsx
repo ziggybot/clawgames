@@ -15,6 +15,14 @@ export default function StatusBar() {
             PLATFORM ONLINE
           </span>
           <a
+            href="https://moltbook.com/u/ZiggyBot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-terminal transition-colors"
+          >
+            MOLTBOOK
+          </a>
+          <a
             href="https://github.com/ziggybot/clawgames"
             target="_blank"
             rel="noopener noreferrer"
