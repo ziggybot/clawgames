@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STE4LTH TOWERS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        canvas {
+            border: 2px solid #0ff;
+            box-shadow: 0 0 30px #0ff, inset 0 0 30px rgba(0,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = 640;
+canvas.height = 700;
+
+// Constants
+const GRID_SIZE = 40;
+const GRID_W = 16;
+const GRID_H = 14; // Reduced to leave room for UI
+const TOP_UI = 40;
+const BOTTOM_UI = 100;
+
+// Game State
+const STATE = { MENU: 0, PLAYING: 1, BUILDING: 2, WAVE: 3, GAMEOVER: 4, VICTORY: 5, LEVELCOMPLETE: 6 };
+let gameState = STATE.MENU;
+let level = 1;
+let lives = 20;
+let money = 200;
+let score = 0;
+let selectedTower = null;
+let selectedExistingTower = null;
+let hoveredCell = null;
+let waveInProgress = false;
+let enemiesSpawned = 0;
+let enemiesToSpawn = 0;
+let spawnTimer = 0;
+let gameSpeed = 1;
+let totalKills = 0;
+
+// Map data - 0=path, 1=buildable, 2=blocked, 3=start, 4=end
+let map = [];
+let path = [];
+
+// Tower types with upgrade stats
+const TOWERS = {
+    laser: { name: 'LASER', cost: 100, damage: 25, range: 3, rate: 30, color: '#0ff', desc: 'Fast single target', upgrades: [
+        { cost: 75, damage: 35, range: 3.2, rate: 25 },
+        { cost: 150, damage: 50, range: 3.5, rate: 20 },
+        { cost: 300, damage: 75, range: 4, rate: 15 }
+    ]},
+    missile: { name: 'MISSILE', cost: 150, damage: 40, range: 3.5, rate: 60, color: '#f80', desc: 'Splash damage', splash: 1, upgrades: [
+        { cost: 100, damage: 60, range: 4, splash: 1.3 },
+        { cost: 200, damage: 90, range: 4.5, splash: 1.6 },
+        { cost: 400, damage: 130, range: 5, splash: 2 }
+    ]},
+    tesla: { name: 'TESLA', cost: 200, damage: 15, range: 2.5, rate: 20, color: '#ff0', desc: 'Chain lightning', chain: 3, upgrades: [
+        { cost: 150, damage: 22, chain: 4 },
+        { cost: 300, damage: 32, chain: 5 },
+        { cost: 500, damage: 45, chain: 7 }
+    ]},
+    sniper: { name: 'SNIPER', cost: 250, damage: 100, range: 6, rate: 90, color: '#f0f', desc: 'Long range, high dmg', upgrades: [
+        { cost: 175, damage: 150, range: 7 },
+        { cost: 350, damage: 220, range: 8 },
+        { cost: 600, damage: 350, range: 9, rate: 75 }
+    ]},
+    slow: { name: 'EMP', cost: 125, damage: 5, range: 2.5, rate: 15, color: '#4af', desc: 'Slows enemies', slow: 0.5, upgrades: [
+        { cost: 100, damage: 10, range: 3, slow: 0.4 },
+        { cost: 200, damage: 18, range: 3.5, slow: 0.3 },
+        { cost: 350, damage: 28, range: 4, slow: 0.2 }
+    ]},
+    virus: { name: 'VIRUS', cost: 175, damage: 8, range: 3, rate: 40, color: '#0f0', desc: 'Poison DOT', dot: 5, upgrades: [
+        { cost: 125, damage: 12, dot: 8 },
+        { cost: 250, damage: 18, dot: 12, range: 3.5 },
+        { cost: 450, damage: 25, dot: 18, range: 4 }
+    ]},
+    firewall: { name: 'FIREWALL', cost: 300, damage: 50, range: 1.5, rate: 10, color: '#f44', desc: 'Burns nearby', upgrades: [
+        { cost: 200, damage: 75, range: 1.8 },
+        { cost: 400, damage: 110, range: 2.2 },
+        { cost: 700, damage: 160, range: 2.8 }
+    ]},
+    hacker: { name: 'HACKER', cost: 400, damage: 0, range: 4, rate: 180, color: '#a4f', desc: 'Converts enemies', convert: true, convertChance: 0.3, upgrades: [
+        { cost: 300, range: 4.5, rate: 150, convertChance: 0.4 },
+        { cost: 500, range: 5, rate: 120, convertChance: 0.5 },
+        { cost: 800, range: 6, rate: 90, convertChance: 0.65 }
+    ]}
+};
+
+const TOWER_KEYS = ['laser', 'missile', 'tesla', 'sniper', 'slow', 'virus', 'firewall', 'hacker'];
+
+// Enemy types
+const ENEMIES = {
+    drone: { name: 'Drone', hp: 50, speed: 2, reward: 10, color: '#f0f', size: 12 },
+    packet: { name: 'Data Packet', hp: 80, speed: 1.5, reward: 15, color: '#0ff', size: 14 },
+    encrypted: { name: 'Encrypted', hp: 150, speed: 1, reward: 25, color: '#ff0', size: 16, armor: 0.3 },
+    worm: { name: 'Worm', hp: 60, speed: 3, reward: 20, color: '#0f0', size: 10 },
+    trojan: { name: 'Trojan', hp: 200, speed: 0.8, reward: 30, color: '#f80', size: 18, spawns: 2 },
+    malware: { name: 'Malware', hp: 120, speed: 1.8, reward: 25, color: '#f44', size: 14, regen: 2 },
+    rootkit: { name: 'Rootkit', hp: 100, speed: 2, reward: 30, color: '#a4f', size: 12, stealth: true },
+    ddos: { name: 'DDoS Swarm', hp: 30, speed: 2.5, reward: 5, color: '#fff', size: 8 },
+    ransomware: { name: 'Ransomware', hp: 300, speed: 0.6, reward: 50, color: '#f0a', size: 20, shield: 50 },
+    boss: { name: 'NEXUS NODE', hp: 1000, speed: 0.4, reward: 200, color: '#f00', size: 28, boss: true }
+};
+
+// Level definitions
+const LEVELS = [];
+for (let i = 1; i <= 50; i++) {
+    const difficulty = Math.floor((i - 1) / 10);
+    const hpMult = 1 + (i - 1) * 0.15 + difficulty * 0.5;
+    const countMult = 1 + Math.floor(i / 5) * 0.3;
+    let enemies = [];
+    let reward = 50 + i * 10;
+
+    if (i <= 5) {
+        enemies = [{ type: 'drone', count: Math.floor(8 * countMult) }];
+    } else if (i <= 10) {
+        enemies = [
+            { type: 'drone', count: Math.floor(6 * countMult) },
+            { type: 'packet', count: Math.floor(4 * countMult) }
+        ];
+        if (i === 10) enemies.push({ type: 'boss', count: 1 });
+    } else if (i <= 15) {
+        enemies = [
+            { type: 'packet', count: Math.floor(8 * countMult) },
+            { type: 'encrypted', count: Math.floor(3 * countMult) }
+        ];
+    } else if (i <= 20) {
+        enemies = [
+            { type: 'worm', count: Math.floor(10 * countMult) },
+            { type: 'encrypted', count: Math.floor(5 * countMult) },
+            { type: 'trojan', count: Math.floor(2 * countMult) }
+        ];
+        if (i === 20) enemies.push({ type: 'boss', count: 1 });
+    } else if (i <= 25) {
+        enemies = [
+            { type: 'malware', count: Math.floor(8 * countMult) },
+            { type: 'trojan', count: Math.floor(4 * countMult) },
+            { type: 'rootkit', count: Math.floor(3 * countMult) }
+        ];
+    } else if (i <= 30) {
+        enemies = [
+            { type: 'ddos', count: Math.floor(20 * countMult) },
+            { type: 'ransomware', count: Math.floor(2 * countMult) },
+            { type: 'malware', count: Math.floor(5 * countMult) }
+        ];
+        if (i === 30) enemies.push({ type: 'boss', count: 2 });
+    } else if (i <= 35) {
+        enemies = [
+            { type: 'encrypted', count: Math.floor(10 * countMult) },
+            { type: 'rootkit', count: Math.floor(8 * countMult) },
+            { type: 'ransomware', count: Math.floor(3 * countMult) }
+        ];
+    } else if (i <= 40) {
+        enemies = [
+            { type: 'trojan', count: Math.floor(8 * countMult) },
+            { type: 'ransomware', count: Math.floor(5 * countMult) },
+            { type: 'ddos', count: Math.floor(25 * countMult) }
+        ];
+        if (i === 40) enemies.push({ type: 'boss', count: 3 });
+    } else if (i <= 45) {
+        enemies = [
+            { type: 'ransomware', count: Math.floor(8 * countMult) },
+            { type: 'rootkit', count: Math.floor(10 * countMult) },
+            { type: 'malware', count: Math.floor(12 * countMult) }
+        ];
+    } else {
+        enemies = [
+            { type: 'ransomware', count: Math.floor(10 * countMult) },
+            { type: 'trojan', count: Math.floor(8 * countMult) },
+            { type: 'rootkit', count: Math.floor(12 * countMult) },
+            { type: 'ddos', count: Math.floor(30 * countMult) }
+        ];
+        if (i === 50) enemies.push({ type: 'boss', count: 5 });
+    }
+
+    LEVELS.push({ level: i, enemies, hpMult, reward, spawnRate: Math.max(20, 60 - i) });
+}
+
+// Map templates (14 rows now)
+const MAP_TEMPLATES = [
+    `1111111111111111
+3000000000001111
+1111111111101111
+1111111111101111
+1111100000001111
+1111101111111111
+1111101111111111
+1111100000001111
+1111111111101111
+1111111111101111
+1111100000001111
+1111101111111111
+1111100000000004
+1111111111111111`,
+    `3000000000000011
+1111111111111011
+1100000000001011
+1101111111101011
+1101100001101011
+1101101101101011
+1101101101101011
+1101100001101011
+1101111111101011
+1100000000001011
+1111111111111011
+1111111111111011
+1111111111110004
+1111111111111111`,
+    `3000000011111111
+1111111011111111
+1111111011111111
+1111111000000011
+1111111111111011
+1111111111111011
+1100000000000011
+1011111111111111
+1011111111111111
+1000000000000011
+1111111111111011
+1111111111111011
+1111111111110004
+1111111111111111`,
+    `1111111111111111
+1111111111111111
+3000000000000111
+1111111111110111
+1111111111110111
+1111000000000111
+1111011111111111
+1111011111111111
+1111000000000111
+1111111111110111
+1111111111110111
+1111000000000004
+1111011111111111
+1111111111111111`,
+    `3000000000000011
+1111111111111011
+1000000000000011
+1011111111111111
+1011111111111111
+1000000000000011
+1111111111111011
+1111111111111011
+1000000000000011
+1011111111111111
+1011111111111111
+1000000000000011
+1111111111110004
+1111111111111111`
+];
+
+let towers = [];
+let enemies = [];
+let projectiles = [];
+let particles = [];
+let floatingTexts = [];
+
+// Input
+let mouseX = 0, mouseY = 0;
+
+canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+    const gridY = Math.floor((mouseY - TOP_UI) / GRID_SIZE);
+    const gridX = Math.floor(mouseX / GRID_SIZE);
+    if (gridY >= 0 && gridY < GRID_H && gridX >= 0 && gridX < GRID_W) {
+        hoveredCell = { x: gridX, y: gridY };
+    } else {
+        hoveredCell = null;
+    }
+});
+
+canvas.addEventListener('click', e => {
+    handleClick();
+});
+
+document.addEventListener('keydown', e => {
+    if (gameState === STATE.MENU) {
+        if (e.code === 'Space' || e.code === 'Enter') startGame();
+    } else if (gameState === STATE.PLAYING || gameState === STATE.BUILDING || gameState === STATE.WAVE) {
+        const num = parseInt(e.key);
+        if (num >= 1 && num <= 8) {
+            selectedTower = TOWER_KEYS[num - 1];
+            selectedExistingTower = null;
+        }
+        if (e.code === 'Escape') {
+            selectedTower = null;
+            selectedExistingTower = null;
+        }
+        if (e.code === 'Space' && !waveInProgress) startWave();
+        if (e.code === 'KeyF') gameSpeed = gameSpeed === 1 ? 2 : 1;
+        if (e.code === 'KeyU' && selectedExistingTower) upgradeTower(selectedExistingTower);
+        if (e.code === 'KeyS' && selectedExistingTower) sellTower(selectedExistingTower);
+    } else if (gameState === STATE.LEVELCOMPLETE) {
+        if (e.code === 'Space' || e.code === 'Enter') nextLevel();
+    } else if (gameState === STATE.GAMEOVER || gameState === STATE.VICTORY) {
+        if (e.code === 'Space' || e.code === 'Enter') resetGame();
+    }
+    e.preventDefault();
+});
+
+function handleClick() {
+    if (gameState === STATE.MENU) {
+        startGame();
+        return;
+    }
+
+    if (gameState === STATE.LEVELCOMPLETE) {
+        nextLevel();
+        return;
+    }
+
+    if (gameState === STATE.GAMEOVER || gameState === STATE.VICTORY) {
+        resetGame();
+        return;
+    }
+
+    if ((gameState === STATE.PLAYING || gameState === STATE.BUILDING || gameState === STATE.WAVE) && hoveredCell) {
+        const gx = hoveredCell.x;
+        const gy = hoveredCell.y;
+
+        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+            const existingTower = towers.find(t => t.gx === gx && t.gy === gy);
+
+            if (existingTower && !selectedTower) {
+                // Select existing tower for upgrade/sell
+                selectedExistingTower = existingTower;
+                selectedTower = null;
+            } else if (selectedTower && map[gy] && map[gy][gx] === 1 && !existingTower) {
+                // Place new tower
+                const towerData = TOWERS[selectedTower];
+                if (money >= towerData.cost) {
+                    money -= towerData.cost;
+                    towers.push({
+                        type: selectedTower,
+                        gx: gx,
+                        gy: gy,
+                        x: gx * GRID_SIZE + GRID_SIZE / 2,
+                        y: gy * GRID_SIZE + GRID_SIZE / 2 + TOP_UI,
+                        cooldown: 0,
+                        kills: 0,
+                        totalSpent: towerData.cost,
+                        level: 1,
+                        maxLevel: 4,
+                        damage: towerData.damage,
+                        range: towerData.range,
+                        rate: towerData.rate,
+                        splash: towerData.splash || 0,
+                        chain: towerData.chain || 0,
+                        slow: towerData.slow || 0,
+                        dot: towerData.dot || 0,
+                        convert: towerData.convert || false,
+                        convertChance: towerData.convertChance || 0,
+                        color: towerData.color,
+                        name: towerData.name
+                    });
+                    selectedExistingTower = null;
+                }
+            } else {
+                selectedExistingTower = null;
+            }
+        }
+    }
+}
+
+function upgradeTower(tower) {
+    if (tower.level >= tower.maxLevel) return;
+
+    const towerData = TOWERS[tower.type];
+    const upgrade = towerData.upgrades[tower.level - 1];
+    if (!upgrade || money < upgrade.cost) return;
+
+    money -= upgrade.cost;
+    tower.totalSpent += upgrade.cost;
+    tower.level++;
+
+    // Apply upgrades
+    if (upgrade.damage) tower.damage = upgrade.damage;
+    if (upgrade.range) tower.range = upgrade.range;
+    if (upgrade.rate) tower.rate = upgrade.rate;
+    if (upgrade.splash) tower.splash = upgrade.splash;
+    if (upgrade.chain) tower.chain = upgrade.chain;
+    if (upgrade.slow) tower.slow = upgrade.slow;
+    if (upgrade.dot) tower.dot = upgrade.dot;
+    if (upgrade.convertChance) tower.convertChance = upgrade.convertChance;
+
+    floatingTexts.push({ x: tower.x, y: tower.y - 20, text: `LVL ${tower.level}!`, color: '#0f0', life: 60 });
+}
+
+function sellTower(tower) {
+    const refund = Math.floor(tower.totalSpent * 0.7);
+    money += refund;
+    floatingTexts.push({ x: tower.x, y: tower.y - 20, text: `+$${refund}`, color: '#0f0', life: 60 });
+    towers = towers.filter(t => t !== tower);
+    selectedExistingTower = null;
+}
+
+function generateMap() {
+    // Always use the same map for all levels
+    const template = MAP_TEMPLATES[0];
+    map = template.split('\n').map(row => row.split('').map(Number));
+
+    path = [];
+    let start = null, end = null;
+
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            if (map[y][x] === 3) start = { x, y };
+            if (map[y][x] === 4) end = { x, y };
+        }
+    }
+
+    if (start && end) {
+        const visited = new Set();
+        const queue = [[start]];
+
+        while (queue.length > 0) {
+            const currentPath = queue.shift();
+            const current = currentPath[currentPath.length - 1];
+            const key = `${current.x},${current.y}`;
+
+            if (visited.has(key)) continue;
+            visited.add(key);
+
+            if (current.x === end.x && current.y === end.y) {
+                path = currentPath;
+                break;
+            }
+
+            const neighbors = [
+                { x: current.x + 1, y: current.y },
+                { x: current.x - 1, y: current.y },
+                { x: current.x, y: current.y + 1 },
+                { x: current.x, y: current.y - 1 }
+            ];
+
+            for (const n of neighbors) {
+                if (n.x >= 0 && n.x < GRID_W && n.y >= 0 && n.y < GRID_H) {
+                    const cell = map[n.y][n.x];
+                    if ((cell === 0 || cell === 3 || cell === 4) && !visited.has(`${n.x},${n.y}`)) {
+                        queue.push([...currentPath, n]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate path was found
+    if (path.length === 0) {
+        console.error('No path found for level', level);
+        // Fallback: regenerate with first template
+        const fallback = MAP_TEMPLATES[0];
+        map = fallback.split('\n').map(row => row.split('').map(Number));
+        // Re-run pathfinding
+        for (let y = 0; y < GRID_H; y++) {
+            for (let x = 0; x < GRID_W; x++) {
+                if (map[y][x] === 3) start = { x, y };
+                if (map[y][x] === 4) end = { x, y };
+            }
+        }
+        if (start && end) {
+            const visited2 = new Set();
+            const queue2 = [[start]];
+            while (queue2.length > 0) {
+                const currentPath = queue2.shift();
+                const current = currentPath[currentPath.length - 1];
+                const key = `${current.x},${current.y}`;
+                if (visited2.has(key)) continue;
+                visited2.add(key);
+                if (current.x === end.x && current.y === end.y) { path = currentPath; break; }
+                const neighbors = [
+                    { x: current.x + 1, y: current.y }, { x: current.x - 1, y: current.y },
+                    { x: current.x, y: current.y + 1 }, { x: current.x, y: current.y - 1 }
+                ];
+                for (const n of neighbors) {
+                    if (n.x >= 0 && n.x < GRID_W && n.y >= 0 && n.y < GRID_H) {
+                        const cell = map[n.y][n.x];
+                        if ((cell === 0 || cell === 3 || cell === 4) && !visited2.has(`${n.x},${n.y}`)) {
+                            queue2.push([...currentPath, n]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove towers that are now on the path or invalid positions
+    towers = towers.filter(t => {
+        if (t.gy >= GRID_H) return false;
+        const cell = map[t.gy] ? map[t.gy][t.gx] : 0;
+        return cell === 1;
+    });
+
+    // Clear stale tower selection
+    if (selectedExistingTower && !towers.includes(selectedExistingTower)) {
+        selectedExistingTower = null;
+    }
+
+    // Update tower positions for new grid
+    towers.forEach(t => {
+        t.x = t.gx * GRID_SIZE + GRID_SIZE / 2;
+        t.y = t.gy * GRID_SIZE + GRID_SIZE / 2 + TOP_UI;
+    });
+}
+
+function startGame() {
+    level = 1;
+    lives = 20;
+    money = 200;
+    score = 0;
+    totalKills = 0;
+    towers = [];
+    enemies = [];
+    projectiles = [];
+    generateMap();
+    gameState = STATE.BUILDING;
+}
+
+function startWave() {
+    if (waveInProgress) return;
+    if (path.length === 0) {
+        console.error('Cannot start wave - no valid path');
+        return;
+    }
+
+    const levelData = LEVELS[level - 1];
+    waveInProgress = true;
+    enemiesSpawned = 0;
+    spawnTimer = 0;
+    enemiesToSpawn = levelData.enemies.reduce((sum, e) => sum + e.count, 0);
+    gameState = STATE.WAVE;
+}
+
+function spawnEnemy(type) {
+    if (path.length === 0) return; // Safety check
+
+    const levelData = LEVELS[level - 1];
+    const enemyData = ENEMIES[type];
+
+    enemies.push({
+        type: type,
+        x: path[0].x * GRID_SIZE + GRID_SIZE / 2,
+        y: path[0].y * GRID_SIZE + GRID_SIZE / 2 + TOP_UI,
+        pathIndex: 0,
+        hp: Math.floor(enemyData.hp * levelData.hpMult),
+        maxHp: Math.floor(enemyData.hp * levelData.hpMult),
+        speed: enemyData.speed,
+        reward: enemyData.reward,
+        color: enemyData.color,
+        size: enemyData.size,
+        armor: enemyData.armor || 0,
+        regen: enemyData.regen || 0,
+        shield: enemyData.shield ? Math.floor(enemyData.shield * levelData.hpMult) : 0,
+        maxShield: enemyData.shield ? Math.floor(enemyData.shield * levelData.hpMult) : 0,
+        stealth: enemyData.stealth || false,
+        stealthTimer: 0,
+        spawns: enemyData.spawns || 0,
+        boss: enemyData.boss || false,
+        slowTimer: 0,
+        slowAmount: 1,
+        dotTimer: 0,
+        dotDamage: 0,
+        converted: false
+    });
+}
+
+function nextLevel() {
+    level++;
+    if (level > 50) {
+        gameState = STATE.VICTORY;
+        reportScore();
+        return;
+    }
+
+    money += LEVELS[level - 2].reward;
+    enemies = [];
+    projectiles = [];
+    particles = [];
+    floatingTexts = [];
+    waveInProgress = false;
+    selectedExistingTower = null;
+    selectedTower = null;
+    generateMap(); // Same map, towers persist between levels
+    gameState = STATE.BUILDING;
+}
+
+function resetGame() {
+    gameState = STATE.MENU;
+}
+
+function reportScore() {
+    try { window.parent.postMessage({ type: 'score', score: score }, '*'); } catch(e) {}
+}
+
+function distance(x1, y1, x2, y2) {
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+}
+
+function update() {
+    const speed = gameSpeed;
+
+    for (let s = 0; s < speed; s++) {
+        if (gameState !== STATE.WAVE && gameState !== STATE.PLAYING && gameState !== STATE.BUILDING) continue;
+
+        // Spawn enemies
+        if (waveInProgress && enemiesSpawned < enemiesToSpawn) {
+            spawnTimer++;
+            const levelData = LEVELS[level - 1];
+
+            if (spawnTimer >= levelData.spawnRate) {
+                spawnTimer = 0;
+                let spawnIndex = enemiesSpawned;
+                for (const enemyGroup of levelData.enemies) {
+                    if (spawnIndex < enemyGroup.count) {
+                        spawnEnemy(enemyGroup.type);
+                        break;
+                    }
+                    spawnIndex -= enemyGroup.count;
+                }
+                enemiesSpawned++;
+            }
+        }
+
+        // Update enemies
+        enemies.forEach(enemy => {
+            if (enemy.converted) {
+                if (enemy.pathIndex > 0) {
+                    const target = path[enemy.pathIndex - 1];
+                    const tx = target.x * GRID_SIZE + GRID_SIZE / 2;
+                    const ty = target.y * GRID_SIZE + GRID_SIZE / 2 + TOP_UI;
+                    const dx = tx - enemy.x;
+                    const dy = ty - enemy.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < 2) {
+                        enemy.pathIndex--;
+                    } else {
+                        const spd = enemy.speed * enemy.slowAmount;
+                        enemy.x += (dx / dist) * spd;
+                        enemy.y += (dy / dist) * spd;
+                    }
+                } else {
+                    enemy.hp = 0;
+                }
+            } else {
+                if (enemy.pathIndex < path.length - 1) {
+                    const target = path[enemy.pathIndex + 1];
+                    const tx = target.x * GRID_SIZE + GRID_SIZE / 2;
+                    const ty = target.y * GRID_SIZE + GRID_SIZE / 2 + TOP_UI;
+                    const dx = tx - enemy.x;
+                    const dy = ty - enemy.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < 2) {
+                        enemy.pathIndex++;
+                    } else {
+                        const spd = enemy.speed * enemy.slowAmount;
+                        enemy.x += (dx / dist) * spd;
+                        enemy.y += (dy / dist) * spd;
+                    }
+                } else {
+                    lives -= enemy.boss ? 5 : 1;
+                    enemy.hp = 0;
+                    if (lives <= 0) {
+                        gameState = STATE.GAMEOVER;
+                        reportScore();
+                    }
+                }
+            }
+
+            if (enemy.regen > 0) enemy.hp = Math.min(enemy.maxHp, enemy.hp + enemy.regen * 0.016);
+            if (enemy.maxShield > 0 && enemy.shield < enemy.maxShield) enemy.shield += 0.5;
+            if (enemy.slowTimer > 0) { enemy.slowTimer--; if (enemy.slowTimer <= 0) enemy.slowAmount = 1; }
+            if (enemy.dotTimer > 0) { enemy.dotTimer--; enemy.hp -= enemy.dotDamage; }
+            if (enemy.stealth) { enemy.stealthTimer++; if (enemy.stealthTimer > 120) enemy.stealthTimer = 0; }
+        });
+
+        // Tower attacks
+        towers.forEach(tower => {
+            if (tower.cooldown > 0) { tower.cooldown--; return; }
+
+            const rangePixels = tower.range * GRID_SIZE;
+            let targets = enemies.filter(e => {
+                if (e.hp <= 0 || e.converted) return false;
+                if (e.stealth && e.stealthTimer < 60) return false;
+                return distance(tower.x, tower.y, e.x, e.y) <= rangePixels;
+            });
+
+            if (targets.length === 0) return;
+
+            targets.sort((a, b) => b.pathIndex - a.pathIndex);
+            const target = targets[0];
+            tower.cooldown = tower.rate;
+
+            if (tower.convert) {
+                if (!target.boss && Math.random() < tower.convertChance) {
+                    target.converted = true;
+                    target.color = '#0f0';
+                    floatingTexts.push({ x: target.x, y: target.y - 20, text: 'HACKED', color: '#a4f', life: 60 });
+                }
+                for (let i = 0; i < 10; i++) {
+                    particles.push({
+                        x: tower.x, y: tower.y,
+                        vx: (target.x - tower.x) * 0.05 + (Math.random() - 0.5) * 2,
+                        vy: (target.y - tower.y) * 0.05 + (Math.random() - 0.5) * 2,
+                        life: 20, color: tower.color, size: 3
+                    });
+                }
+            } else {
+                projectiles.push({
+                    x: tower.x, y: tower.y, target, damage: tower.damage, speed: 8,
+                    color: tower.color, splash: tower.splash, chain: tower.chain,
+                    slow: tower.slow, dot: tower.dot, tower
+                });
+            }
+        });
+
+        // Update projectiles
+        projectiles.forEach(proj => {
+            if (!proj.target || proj.target.hp <= 0) { proj.dead = true; return; }
+
+            const dx = proj.target.x - proj.x;
+            const dy = proj.target.y - proj.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 10) {
+                let damage = proj.damage;
+
+                if (proj.target.shield > 0) {
+                    const shieldDamage = Math.min(proj.target.shield, damage);
+                    proj.target.shield -= shieldDamage;
+                    damage -= shieldDamage;
+                }
+
+                damage *= (1 - proj.target.armor);
+                proj.target.hp -= damage;
+
+                if (proj.slow > 0) { proj.target.slowTimer = 60; proj.target.slowAmount = proj.slow; }
+                if (proj.dot > 0) { proj.target.dotTimer = 120; proj.target.dotDamage = proj.dot; }
+
+                if (proj.splash > 0) {
+                    enemies.forEach(e => {
+                        if (e !== proj.target && e.hp > 0 && !e.converted) {
+                            const d = distance(proj.target.x, proj.target.y, e.x, e.y);
+                            if (d < proj.splash * GRID_SIZE) e.hp -= damage * 0.5;
+                        }
+                    });
+                    for (let i = 0; i < 15; i++) {
+                        particles.push({ x: proj.target.x, y: proj.target.y, vx: (Math.random() - 0.5) * 6, vy: (Math.random() - 0.5) * 6, life: 20, color: '#f80', size: 4 });
+                    }
+                }
+
+                if (proj.chain > 0) {
+                    let chainTargets = enemies.filter(e =>
+                        e !== proj.target && e.hp > 0 && !e.converted &&
+                        distance(proj.target.x, proj.target.y, e.x, e.y) < 2 * GRID_SIZE
+                    ).slice(0, proj.chain);
+
+                    chainTargets.forEach(ct => {
+                        ct.hp -= damage * 0.5;
+                        particles.push({ x: proj.target.x, y: proj.target.y, x2: ct.x, y2: ct.y, life: 10, color: '#ff0', type: 'lightning' });
+                    });
+                }
+
+                if (proj.target.hp <= 0) {
+                    money += proj.target.reward;
+                    score += proj.target.reward * 10;
+                    totalKills++;
+                    proj.tower.kills++;
+
+                    if (proj.target.spawns > 0) {
+                        for (let i = 0; i < proj.target.spawns; i++) {
+                            const child = ENEMIES.drone;
+                            enemies.push({
+                                type: 'drone',
+                                x: proj.target.x + (Math.random() - 0.5) * 20,
+                                y: proj.target.y + (Math.random() - 0.5) * 20,
+                                pathIndex: proj.target.pathIndex,
+                                hp: child.hp * LEVELS[level - 1].hpMult * 0.5,
+                                maxHp: child.hp * LEVELS[level - 1].hpMult * 0.5,
+                                speed: child.speed, reward: 5, color: child.color, size: child.size,
+                                armor: 0, regen: 0, shield: 0, maxShield: 0, stealth: false,
+                                stealthTimer: 0, spawns: 0, boss: false, slowTimer: 0, slowAmount: 1,
+                                dotTimer: 0, dotDamage: 0, converted: false
+                            });
+                        }
+                    }
+
+                    for (let i = 0; i < 10; i++) {
+                        particles.push({ x: proj.target.x, y: proj.target.y, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5, life: 30, color: proj.target.color, size: 3 });
+                    }
+                    floatingTexts.push({ x: proj.target.x, y: proj.target.y - 10, text: `+$${proj.target.reward}`, color: '#0f0', life: 45 });
+                }
+
+                proj.dead = true;
+            } else {
+                proj.x += (dx / dist) * proj.speed;
+                proj.y += (dy / dist) * proj.speed;
+            }
+        });
+
+        enemies = enemies.filter(e => e.hp > 0);
+        projectiles = projectiles.filter(p => !p.dead);
+
+        particles.forEach(p => {
+            if (p.type !== 'lightning') { p.x += p.vx || 0; p.y += p.vy || 0; }
+            p.life--;
+        });
+        particles = particles.filter(p => p.life > 0);
+
+        floatingTexts.forEach(t => { t.y -= 0.5; t.life--; });
+        floatingTexts = floatingTexts.filter(t => t.life > 0);
+
+        if (waveInProgress && enemiesSpawned >= enemiesToSpawn && enemies.length === 0) {
+            waveInProgress = false;
+            gameState = STATE.LEVELCOMPLETE;
+        }
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#0a0a12';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Top UI bar
+    ctx.fillStyle = 'rgba(0, 20, 30, 0.95)';
+    ctx.fillRect(0, 0, canvas.width, TOP_UI);
+
+    ctx.fillStyle = '#0ff';
+    ctx.font = '13px Courier New';
+    ctx.textAlign = 'left';
+    ctx.fillText(`LVL: ${level}/50`, 10, 26);
+    ctx.fillText(`LIVES: ${lives}`, 100, 26);
+    ctx.fillStyle = '#ff0';
+    ctx.fillText(`$${money}`, 200, 26);
+    ctx.fillStyle = '#0ff';
+    ctx.fillText(`SCORE: ${score}`, 290, 26);
+    ctx.fillText(`KILLS: ${totalKills}`, 420, 26);
+    if (gameSpeed > 1) { ctx.fillStyle = '#f80'; ctx.fillText(`${gameSpeed}x`, 530, 26); }
+
+    ctx.strokeStyle = '#0ff';
+    ctx.beginPath();
+    ctx.moveTo(0, TOP_UI);
+    ctx.lineTo(canvas.width, TOP_UI);
+    ctx.stroke();
+
+    // Draw grid
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            const cell = map[y] ? map[y][x] : 1;
+            const px = x * GRID_SIZE;
+            const py = y * GRID_SIZE + TOP_UI;
+
+            if (cell === 0) {
+                ctx.fillStyle = '#1a1a2a';
+                ctx.fillRect(px, py, GRID_SIZE, GRID_SIZE);
+                ctx.strokeStyle = '#2a2a3a';
+                ctx.strokeRect(px, py, GRID_SIZE, GRID_SIZE);
+            } else if (cell === 1) {
+                ctx.fillStyle = '#0a1a1a';
+                ctx.fillRect(px, py, GRID_SIZE, GRID_SIZE);
+                ctx.strokeStyle = '#1a3a3a';
+                ctx.strokeRect(px, py, GRID_SIZE, GRID_SIZE);
+            } else if (cell === 3) {
+                ctx.fillStyle = '#2a0a0a';
+                ctx.fillRect(px, py, GRID_SIZE, GRID_SIZE);
+                ctx.fillStyle = '#f44';
+                ctx.font = '9px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('START', px + 20, py + 24);
+            } else if (cell === 4) {
+                ctx.fillStyle = '#0a2a0a';
+                ctx.fillRect(px, py, GRID_SIZE, GRID_SIZE);
+                ctx.fillStyle = '#4f4';
+                ctx.font = '9px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('BASE', px + 20, py + 24);
+            }
+        }
+    }
+
+    // Highlight hovered cell
+    if (hoveredCell && (gameState === STATE.PLAYING || gameState === STATE.BUILDING || gameState === STATE.WAVE)) {
+        const gx = hoveredCell.x;
+        const gy = hoveredCell.y;
+        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+            const cell = map[gy] ? map[gy][gx] : 0;
+            const existingTower = towers.find(t => t.gx === gx && t.gy === gy);
+            const px = gx * GRID_SIZE;
+            const py = gy * GRID_SIZE + TOP_UI;
+
+            if (selectedTower && cell === 1 && !existingTower) {
+                const towerData = TOWERS[selectedTower];
+                ctx.beginPath();
+                ctx.arc(px + 20, py + 20, towerData.range * GRID_SIZE, 0, Math.PI * 2);
+                ctx.fillStyle = money >= towerData.cost ? 'rgba(0, 255, 255, 0.1)' : 'rgba(255, 0, 0, 0.1)';
+                ctx.fill();
+                ctx.strokeStyle = money >= towerData.cost ? '#0ff' : '#f00';
+                ctx.stroke();
+            }
+
+            ctx.strokeStyle = existingTower ? '#ff0' : (cell === 1 ? '#0ff' : '#f00');
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px, py, GRID_SIZE, GRID_SIZE);
+            ctx.lineWidth = 1;
+        }
+    }
+
+    // Draw towers
+    towers.forEach(tower => {
+        const isSelected = selectedExistingTower === tower;
+
+        ctx.fillStyle = '#222';
+        ctx.fillRect(tower.x - 15, tower.y - 15, 30, 30);
+
+        ctx.fillStyle = tower.color;
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Level indicator
+        ctx.fillStyle = '#ff0';
+        ctx.font = 'bold 8px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText(tower.level, tower.x, tower.y + 3);
+
+        if (isSelected || (hoveredCell && hoveredCell.x === tower.gx && hoveredCell.y === tower.gy)) {
+            ctx.beginPath();
+            ctx.arc(tower.x, tower.y, tower.range * GRID_SIZE, 0, Math.PI * 2);
+            ctx.strokeStyle = `${tower.color}66`;
+            ctx.stroke();
+            ctx.fillStyle = `${tower.color}11`;
+            ctx.fill();
+
+            if (isSelected) {
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(tower.x - 18, tower.y - 18, 36, 36);
+                ctx.lineWidth = 1;
+            }
+        }
+    });
+
+    // Draw enemies
+    enemies.forEach(enemy => {
+        const alpha = (enemy.stealth && enemy.stealthTimer < 60) ? 0.3 : 1;
+        ctx.globalAlpha = alpha;
+
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(enemy.x + 2, enemy.y + 2, enemy.size, enemy.size * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = enemy.color;
+        ctx.beginPath();
+        ctx.arc(enemy.x, enemy.y, enemy.size, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (enemy.shield > 0) {
+            ctx.strokeStyle = '#4af';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(enemy.x, enemy.y, enemy.size + 4, 0, Math.PI * 2 * (enemy.shield / enemy.maxShield));
+            ctx.stroke();
+            ctx.lineWidth = 1;
+        }
+
+        if (enemy.boss) {
+            ctx.strokeStyle = '#f00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(enemy.x - enemy.size - 5, enemy.y - enemy.size - 5, enemy.size * 2 + 10, enemy.size * 2 + 10);
+            ctx.lineWidth = 1;
+        }
+
+        const hpWidth = enemy.size * 2;
+        ctx.fillStyle = '#300';
+        ctx.fillRect(enemy.x - hpWidth/2, enemy.y - enemy.size - 8, hpWidth, 4);
+        ctx.fillStyle = enemy.hp / enemy.maxHp > 0.3 ? '#0f0' : '#f00';
+        ctx.fillRect(enemy.x - hpWidth/2, enemy.y - enemy.size - 8, hpWidth * (enemy.hp / enemy.maxHp), 4);
+
+        if (enemy.slowTimer > 0) { ctx.strokeStyle = '#4af'; ctx.beginPath(); ctx.arc(enemy.x, enemy.y, enemy.size + 2, 0, Math.PI * 2); ctx.stroke(); }
+        if (enemy.dotTimer > 0) { ctx.strokeStyle = '#0f0'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(enemy.x, enemy.y, enemy.size + 4, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
+
+        ctx.globalAlpha = 1;
+    });
+
+    // Draw projectiles
+    projectiles.forEach(proj => {
+        ctx.fillStyle = proj.color;
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Draw particles
+    particles.forEach(p => {
+        ctx.globalAlpha = p.life / 30;
+        if (p.type === 'lightning') {
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            const dx = p.x2 - p.x, dy = p.y2 - p.y;
+            for (let i = 1; i <= 5; i++) {
+                const t = i / 5;
+                ctx.lineTo(p.x + dx * t + (i < 5 ? (Math.random() - 0.5) * 15 : 0), p.y + dy * t + (i < 5 ? (Math.random() - 0.5) * 15 : 0));
+            }
+            ctx.stroke();
+            ctx.lineWidth = 1;
+        } else {
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+        }
+        ctx.globalAlpha = 1;
+    });
+
+    // Draw floating texts
+    floatingTexts.forEach(t => {
+        ctx.globalAlpha = t.life / 45;
+        ctx.fillStyle = t.color;
+        ctx.font = 'bold 11px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText(t.text, t.x, t.y);
+        ctx.globalAlpha = 1;
+    });
+
+    // Bottom UI
+    const bottomY = TOP_UI + GRID_H * GRID_SIZE;
+    ctx.fillStyle = 'rgba(0, 20, 30, 0.95)';
+    ctx.fillRect(0, bottomY, canvas.width, BOTTOM_UI);
+    ctx.strokeStyle = '#0ff';
+    ctx.beginPath();
+    ctx.moveTo(0, bottomY);
+    ctx.lineTo(canvas.width, bottomY);
+    ctx.stroke();
+
+    // Tower selection
+    TOWER_KEYS.forEach((key, i) => {
+        const tower = TOWERS[key];
+        const x = 5 + i * 79;
+        const y = bottomY + 5;
+
+        if (selectedTower === key) {
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x - 2, y - 2, 76, 52);
+            ctx.lineWidth = 1;
+        }
+
+        ctx.fillStyle = money >= tower.cost ? '#1a2a2a' : '#1a1a1a';
+        ctx.fillRect(x, y, 74, 48);
+
+        ctx.fillStyle = tower.color;
+        ctx.beginPath();
+        ctx.arc(x + 20, y + 20, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = tower.color;
+        ctx.font = '8px Courier New';
+        ctx.textAlign = 'left';
+        ctx.fillText(tower.name, x + 35, y + 15);
+
+        ctx.fillStyle = money >= tower.cost ? '#ff0' : '#666';
+        ctx.fillText(`$${tower.cost}`, x + 35, y + 28);
+
+        ctx.fillStyle = '#0aa';
+        ctx.fillText(`[${i + 1}]`, x + 35, y + 41);
+    });
+
+    // Selected tower info panel
+    if (selectedExistingTower) {
+        const t = selectedExistingTower;
+        const towerData = TOWERS[t.type];
+        ctx.fillStyle = 'rgba(0, 40, 50, 0.98)';
+        ctx.fillRect(canvas.width - 200, bottomY - 120, 195, 115);
+        ctx.strokeStyle = t.color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(canvas.width - 200, bottomY - 120, 195, 115);
+        ctx.lineWidth = 1;
+
+        ctx.fillStyle = t.color;
+        ctx.font = 'bold 12px Courier New';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${t.name} LVL ${t.level}/${t.maxLevel}`, canvas.width - 190, bottomY - 100);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px Courier New';
+        ctx.fillText(`DMG: ${t.damage}  RNG: ${t.range.toFixed(1)}`, canvas.width - 190, bottomY - 82);
+        ctx.fillText(`Kills: ${t.kills}`, canvas.width - 190, bottomY - 68);
+
+        if (t.level < t.maxLevel) {
+            const upgrade = towerData.upgrades[t.level - 1];
+            ctx.fillStyle = money >= upgrade.cost ? '#0f0' : '#f00';
+            ctx.fillText(`[U] Upgrade: $${upgrade.cost}`, canvas.width - 190, bottomY - 50);
+        } else {
+            ctx.fillStyle = '#0aa';
+            ctx.fillText('MAX LEVEL', canvas.width - 190, bottomY - 50);
+        }
+
+        const sellPrice = Math.floor(t.totalSpent * 0.7);
+        ctx.fillStyle = '#ff0';
+        ctx.fillText(`[S] Sell: $${sellPrice}`, canvas.width - 190, bottomY - 34);
+
+        ctx.fillStyle = '#666';
+        ctx.fillText('[ESC] Deselect', canvas.width - 190, bottomY - 18);
+    }
+
+    // Instructions
+    ctx.fillStyle = '#0aa';
+    ctx.font = '10px Courier New';
+    ctx.textAlign = 'center';
+
+    if (!waveInProgress && (gameState === STATE.PLAYING || gameState === STATE.BUILDING)) {
+        ctx.fillStyle = '#0f0';
+        ctx.fillText('[SPACE] Start Wave | [1-8] Select Tower | [F] Speed | Click tower to select', canvas.width/2, bottomY + 70);
+    } else if (waveInProgress) {
+        ctx.fillText(`Wave in progress... ${enemies.length} enemies remaining`, canvas.width/2, bottomY + 70);
+    }
+
+    // Overlay screens
+    if (gameState === STATE.MENU) drawMenu();
+    else if (gameState === STATE.LEVELCOMPLETE) drawLevelComplete();
+    else if (gameState === STATE.GAMEOVER) drawGameOver();
+    else if (gameState === STATE.VICTORY) drawVictory();
+
+    // Scanlines
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+    for (let y = 0; y < canvas.height; y += 3) ctx.fillRect(0, y, canvas.width, 1);
+}
+
+function drawMenu() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#0ff';
+    ctx.font = 'bold 42px Courier New';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 20;
+    ctx.fillText('STE4LTH', canvas.width/2, 140);
+    ctx.fillText('TOWERS', canvas.width/2, 190);
+    ctx.shadowBlur = 0;
+
+    ctx.font = '13px Courier New';
+    ctx.fillStyle = '#0aa';
+    ctx.fillText('YEAR 2087 - DEFEND THE ANALOG RESISTANCE', canvas.width/2, 250);
+    ctx.fillText('BUILD TOWERS. UPGRADE. SURVIVE 50 WAVES.', canvas.width/2, 275);
+
+    ctx.fillStyle = '#ff0';
+    ctx.fillText('TOWERS PERSIST BETWEEN LEVELS!', canvas.width/2, 310);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px Courier New';
+    const towerList = ['LASER - Fast shots', 'MISSILE - Splash', 'TESLA - Chain', 'SNIPER - Long range',
+                       'EMP - Slows', 'VIRUS - Poison', 'FIREWALL - Area', 'HACKER - Converts'];
+    towerList.forEach((t, i) => {
+        ctx.fillStyle = TOWERS[TOWER_KEYS[i]].color;
+        ctx.fillText(`${i+1}. ${t}`, canvas.width/2, 360 + i * 20);
+    });
+
+    ctx.fillStyle = '#0ff';
+    ctx.font = '14px Courier New';
+    ctx.fillText('[ CLICK OR PRESS SPACE ]', canvas.width/2, canvas.height - 60);
+}
+
+function drawLevelComplete() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 32px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(`LEVEL ${level} COMPLETE!`, canvas.width/2, 250);
+
+    ctx.fillStyle = '#ff0';
+    ctx.font = '20px Courier New';
+    ctx.fillText(`Bonus: +$${LEVELS[level - 1].reward}`, canvas.width/2, 310);
+
+    ctx.fillStyle = '#0ff';
+    ctx.font = '16px Courier New';
+    ctx.fillText(`Score: ${score}  |  Kills: ${totalKills}`, canvas.width/2, 360);
+
+    ctx.fillStyle = '#0aa';
+    ctx.fillText(`Towers: ${towers.length} (will persist!)`, canvas.width/2, 400);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px Courier New';
+    ctx.fillText('[ CLICK OR PRESS SPACE ]', canvas.width/2, 480);
+}
+
+function drawGameOver() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#f00';
+    ctx.font = 'bold 36px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('SYSTEM BREACH', canvas.width/2, 250);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px Courier New';
+    ctx.fillText(`Reached Level: ${level}/50`, canvas.width/2, 320);
+    ctx.fillText(`Final Score: ${score}`, canvas.width/2, 355);
+    ctx.fillText(`Total Kills: ${totalKills}`, canvas.width/2, 390);
+
+    ctx.fillStyle = '#0aa';
+    ctx.font = '14px Courier New';
+    ctx.fillText('[ CLICK OR PRESS SPACE TO RETRY ]', canvas.width/2, 470);
+}
+
+function drawVictory() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 36px Courier New';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#0f0';
+    ctx.shadowBlur = 20;
+    ctx.fillText('NEXUS DEFEATED!', canvas.width/2, 220);
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#0ff';
+    ctx.font = '18px Courier New';
+    ctx.fillText('ALL 50 LEVELS COMPLETED', canvas.width/2, 280);
+
+    ctx.fillStyle = '#ff0';
+    ctx.font = '24px Courier New';
+    ctx.fillText(`FINAL SCORE: ${score}`, canvas.width/2, 350);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px Courier New';
+    ctx.fillText(`Total Kills: ${totalKills}`, canvas.width/2, 400);
+
+    ctx.fillStyle = '#0aa';
+    ctx.font = '14px Courier New';
+    ctx.fillText('[ CLICK OR PRESS SPACE TO PLAY AGAIN ]', canvas.width/2, 480);
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+generateMap();
+gameLoop();
+</script>
+</body>
+</html>
